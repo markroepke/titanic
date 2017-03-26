@@ -1,5 +1,6 @@
 # file types to ignore
 *.csv
 *.Rout
-*.Rdata
+*.RData
 *.rds
+*.gitignore
