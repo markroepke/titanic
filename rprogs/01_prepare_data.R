@@ -20,108 +20,97 @@ setwd("C://Users//roepk_000//OneDrive//Documents//Data//data//kaggle//titanic")
 
 # LOAD PACKAGES #
 library(tidyverse)
-library(glmnet)
+library(data.table)
 
-################
-# Prepare Data #
-################
+#############
+# Load Data #
+#############
 
-# Load train data #
-set.seed(8451)
-train <- read_csv("input/train.csv") %>%
-  mutate(runif = runif(n = nrow(.),
-                       min = 0,
-                       max = 1),
-         data = ifelse(runif <= 0.8,
-                       "train",
-                       "val")) %>%
-  select(-runif)
+# Load training data
+train <- fread("input/train.csv") %>%
+  dplyr::mutate(data = "train")
 
-# Load test data #
-test <- read_csv("input/test.csv") %>%
-  mutate(data = "test")
+# Load holdout data
+test <- fread("input/test.csv") %>%
+  dplyr::mutate(data = "test")
 
-# Combine data #
+# Combine data
 combined_data <- train %>%
-  bind_rows(test) %>%
-# Format variables #
-  mutate(survived = Survived,
-         first_class = ifelse(Pclass == 1, 1, 0),
-         second_class = ifelse(Pclass == 2, 1, 0),
-         third_class = ifelse(Pclass == 3, 1, 0),
-         female = ifelse(Sex == "female", 1, 0),
-         age = Age,
-         young_child = ifelse(Age < 5, 1, 0),
-         old_child = ifelse(Age > 12, ifelse(Age < 18, 1, 0), 0),
-         young_female_child = young_child*female,
-         young_male_child = ifelse(female == 0, ifelse(young_child == 1, 1, 0), 0),
-         sibling_spouse = SibSp,
-         parent_child = Parch,
-         mother = ifelse(parent_child == 1, ifelse(female == 1, ifelse(age > 18, 1, 0), 0), 0),
-         ticket_pc = ifelse(substr(Ticket, 1, 2) == "PC", 1, 0),
-         ticket_soto = ifelse(substr(Ticket, 1, 4) == "SOTO", 1, 0),
-         ticket_ston = ifelse(substr(Ticket, 1, 4) == "STON", 1, 0),
-         ticket_c_a = ifelse(substr(Ticket, 1, 4) == "C.A.", 1, 0),
-         ticket_ca = ifelse(substr(Ticket, 1, 2) == "CA", 1, 0),
-         ticket_a = ifelse(substr(Ticket, 1, 1) == "A", 1, 0),
-         ticket_3470 = ifelse(substr(Ticket, 1, 4) == "3470", 1, 0),
-         ticket_1137 = ifelse(substr(Ticket, 1, 4) == "1137", 1, 0),
-         fare = Fare,
-         cabin_a = ifelse(substr(Cabin, 1, 1) == "A", 1, 0),
-         cabin_b = ifelse(substr(Cabin, 1, 1) == "B", 1, 0),
-         cabin_c = ifelse(substr(Cabin, 1, 1) == "C", 1, 0),
-         cabin_d = ifelse(substr(Cabin, 1, 1) == "D", 1, 0),
-         cabin_e = ifelse(substr(Cabin, 1, 1) == "E", 1, 0),
-         cabin_f = ifelse(substr(Cabin, 1, 1) == "F", 1, 0),
-         cabin_g = ifelse(substr(Cabin, 1, 1) == "G", 1, 0),
-         cabin_t = ifelse(substr(Cabin, 1, 1) == "T", 1, 0),
-         embark_cherbourg = ifelse(Embarked == "C", 1, 0),
-         embark_queenstown = ifelse(Embarked == "Q", 1, 0)) %>%
-  # DROP UNWANTED VARIABLES FROM DATA.FRAME #
-  select(-c(PassengerId, 
-            Survived, 
-            Pclass, 
-            Name, 
-            Sex, 
-            Age, 
-            SibSp, 
-            Parch, 
-            Ticket, 
-            Fare, 
-            Cabin, 
-            Embarked))
+  dplyr::bind_rows(test)
 
-# Save train/test variable for reference
-data_set_type <- combined_data$data
+#######################
+# Feature Engineering #
+#######################
 
-# Remove train/test variable from data set and convert to matrix
+# Make all column names lower case for ease
+names(combined_data) <- str_to_lower(names(combined_data))
+
+# Add some informative columns to hint algorithm
 combined_data <- combined_data %>%
-  select(-data) %>%
-  as.matrix()
+  dplyr::mutate(child = ifelse(age < 18, 1, 0),
+         young_child = ifelse(age < 5, 1, 0),
+         middle_child = ifelse(between(age, 5, 12), 1, 0),
+         old_child = ifelse(between(age, 13, 18), 1, 0),
+         young_female_child = ifelse(sex == "female", ifelse(young_child == 1, 1, 0), 0),
+         middle_female_child = ifelse(sex == "female", ifelse(middle_child == 1, 1, 0), 0),
+         old_female_child = ifelse(sex == "female", ifelse(old_child == 1, 1, 0), 0),
+         young_male_child = ifelse(sex == "male", ifelse(young_child == 1, 1, 0), 0),
+         middle_male_child = ifelse(sex == "male", ifelse(middle_child == 1, 1, 0), 0),
+         old_male_child = ifelse(sex == "male", ifelse(old_child == 1, 1, 0), 0),
+         female_adult = ifelse(sex == "female", ifelse(child == 0, 1, 0), 0),
+         mother = ifelse(parch == 1, ifelse(female_adult == 1, 1, 0), 0),
+         wife = ifelse(female_adult == 1, ifelse(sibsp == 1, 1, 0), 0),
+         male_adult = ifelse(sex == "male", ifelse(child == 0, 1, 0), 0),
+         father = ifelse(parch == 1, ifelse(male_adult == 1, 1, 0), 0),
+         husband = ifelse(male_adult == 1, ifelse(sibsp == 1, 1, 0), 0),
+         family_size = sibsp + parch + 1,
+         ticket_pc = ifelse(str_sub(ticket, 1, 2) == "PC", 1, 0),
+         ticket_soto = ifelse(str_sub(ticket, 1, 4) == "SOTO", 1, 0),
+         ticket_ston = ifelse(str_sub(ticket, 1, 4) == "STON", 1, 0),
+         ticket_c_a = ifelse(str_sub(ticket, 1, 4) == "C.A.", 1, 0),
+         ticket_ca = ifelse(str_sub(ticket, 1, 2) == "CA", 1, 0),
+         ticket_a = ifelse(str_sub(ticket, 1, 1) == "A", 1, 0),
+         ticket_3470 = ifelse(str_sub(ticket, 1, 4) == "3470", 1, 0),
+         ticket_1137 = ifelse(str_sub(ticket, 1, 4) == "1137", 1, 0),
+         cabin_a = ifelse(str_sub(cabin, 1, 1) == "A", 1, 0),
+         cabin_b = ifelse(str_sub(cabin, 1, 1) == "B", 1, 0),
+         cabin_c = ifelse(str_sub(cabin, 1, 1) == "C", 1, 0),
+         cabin_d = ifelse(str_sub(cabin, 1, 1) == "D", 1, 0),
+         cabin_e = ifelse(str_sub(cabin, 1, 1) == "E", 1, 0),
+         cabin_f = ifelse(str_sub(cabin, 1, 1) == "F", 1, 0),
+         cabin_g = ifelse(str_sub(cabin, 1, 1) == "G", 1, 0),
+         cabin_t = ifelse(str_sub(cabin, 1, 1) == "T", 1, 0)
+  )
 
-# Replace NAs with the mean to minimize missing data impact on predictors #
-for (i in 2:ncol(combined_data)){
-  combined_data[is.na(combined_data[,i]),i] <- mean(combined_data[,i], na.rm = TRUE)
-}
+# Family Groups
+family_name <- sapply(combined_data$name, FUN = function(x) {str_split(x, pattern = "[,.]")[[1]][1]})
+combined_data$family_group <- str_c(family_name, "-", combined_data$family_size)
+combined_data$family_group <- ifelse(as.numeric(str_sub(combined_data$family_group, str_length(combined_data$family_group), str_length(combined_data$family_group))) < 3, NA, combined_data$family_group)
 
-# Convert back to data frame #
+# Average fare by family group
 combined_data <- combined_data %>%
-  as.data.frame()
+  dplyr::filter(!is.na(family_group)) %>%
+  dplyr::group_by(family_group) %>%
+  dplyr::summarize(mean_fare = mean(fare)) %>%
+  dplyr::right_join(combined_data, by = "family_group") %>%
+  dplyr::ungroup()
+  
 
-# Manually standardize predictor variables #
-combined_data[2:ncol(combined_data)] <- lapply(combined_data[2:ncol(combined_data)], scale)
-combined_data[2:ncol(combined_data)] <- lapply(combined_data[2:ncol(combined_data)], as.double)
+# Titles
+combined_data$title <- sapply(combined_data$name, FUN = function(x) {str_split(x, pattern = "[,.]")[[1]][2]})
+combined_data$title <- str_replace_all(combined_data$title, " ", "")
+combined_data$title[combined_data$title %in% c("Ms", "Miss")] <- "Miss"
+combined_data$title[combined_data$title %in% c("Mme", "Mlle")] <- "Mlle"
+combined_data$title[combined_data$title %in% c("Capt", "Don", "Major", "Sir")] <- "Sir"
+combined_data$title[combined_data$title %in% c("Dona", "Lady", "theCountess", "Jonkheer")] <- "Lady"
 
-# Replace new NAs with the mean to minimize missing data impact on predictors #
-for (i in 2:ncol(combined_data)){
-  combined_data[is.na(combined_data[,i]),i] <- mean(combined_data[,i], na.rm = TRUE)
-}
+# Remove excess variables
+combined_data <- combined_data %>%
+  select(-c(name))
 
-# Add train/type variable back to dataset #
-combined_data$data <- data_set_type
 
 ###############
 # Saving Data #
 ###############
 
-saveRDS(combined_data, file = "input/combined_data.rds")
+write_rds(combined_data, path = "input/combined_data.rds")
